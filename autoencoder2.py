@@ -324,6 +324,9 @@ def train_autoencoder(X_train_scaled, X_val_scaled, device, save_dir, feature_na
     # Data loaders
     train_loader = DataLoader(train_dataset, batch_size=best_params['batch_size'], shuffle=True)
     val_loader = DataLoader(val_dataset, batch_size=best_params['batch_size'], shuffle=False)
+    # UNSHUFFLED loaders for reconstruction error calculation
+    train_loader_eval = DataLoader(train_dataset, batch_size=best_params['batch_size'], shuffle=False)
+    val_loader_eval = DataLoader(val_dataset, batch_size=best_params['batch_size'], shuffle=False)
     
     # Loss and optimizer
     criterion = nn.MSELoss()
@@ -350,7 +353,7 @@ def train_autoencoder(X_train_scaled, X_val_scaled, device, save_dir, feature_na
     train_originals = []
     
     with torch.no_grad():
-        for batch_input, batch_target in train_loader:
+        for batch_input, batch_target in train_loader_eval:
             batch_input = batch_input.to(device)
             reconstructed = final_model(batch_input)
             train_reconstructions.append(reconstructed.cpu().numpy())
@@ -364,7 +367,7 @@ def train_autoencoder(X_train_scaled, X_val_scaled, device, save_dir, feature_na
     val_originals = []
     
     with torch.no_grad():
-        for batch_input, batch_target in val_loader:
+        for batch_input, batch_target in val_loader_eval:
             batch_input = batch_input.to(device)
             reconstructed = final_model(batch_input)
             val_reconstructions.append(reconstructed.cpu().numpy())
@@ -445,9 +448,18 @@ def train_autoencoder(X_train_scaled, X_val_scaled, device, save_dir, feature_na
         reconstructed_feature_full = val_reconstructions_original[:, feature_idx]  # ALL 3453 points
         
         # Calculate per-feature metrics on FULL data
+        # feature_rmse = np.sqrt(mean_squared_error(actual_feature_full, reconstructed_feature_full))
+        # feature_mae = mean_absolute_error(actual_feature_full, reconstructed_feature_full)
+        # feature_r2 = r2_score(actual_feature_full, reconstructed_feature_full)
         feature_rmse = np.sqrt(mean_squared_error(actual_feature_full, reconstructed_feature_full))
         feature_mae = mean_absolute_error(actual_feature_full, reconstructed_feature_full)
         feature_r2 = r2_score(actual_feature_full, reconstructed_feature_full)
+
+        # Convert to percentages
+        mean_actual_feat = np.mean(np.abs(actual_feature_full))
+        feature_mae_pct = (feature_mae / mean_actual_feat) * 100 if mean_actual_feat != 0 else 0
+        feature_rmse_pct = (feature_rmse / mean_actual_feat) * 100 if mean_actual_feat != 0 else 0
+        feature_r2_pct = feature_r2 * 100
         
         # ========================================================================
         # STEP B: Sample data for PLOTTING ONLY (reduce size!)
@@ -514,10 +526,15 @@ def train_autoencoder(X_train_scaled, X_val_scaled, device, save_dir, feature_na
             "threshold_lower": round(value_threshold_lower, 2),
             "threshold_upper": round(value_threshold_upper, 2),
             "timestamps": [str(ts) for ts in timestamps_plot],
+            # "metrics": {
+            #     "rmse": round(float(feature_rmse), 2),
+            #     "mae": round(float(feature_mae), 2),
+            #     "r2": round(float(feature_r2), 4)
+            # }
             "metrics": {
-                "rmse": round(float(feature_rmse), 2),
-                "mae": round(float(feature_mae), 2),
-                "r2": round(float(feature_r2), 4)
+                "rmse": round(feature_rmse_pct, 1),
+                "mae": round(feature_mae_pct, 1),
+                "r2": round(feature_r2_pct, 1)
             }
         })
 
@@ -613,9 +630,27 @@ def train_autoencoder(X_train_scaled, X_val_scaled, device, save_dir, feature_na
     max_plot_points_overall = 1000  # Consistent with per-feature sampling
 
     if len(timestamps_sorted_full) > max_plot_points_overall:
-        # Sample evenly across entire dataset
-        sample_indices_overall = np.linspace(0, len(timestamps_sorted_full) - 1, max_plot_points_overall, dtype=int)
+        # First, get indices of ALL anomalies (must include these!)
+        anomaly_indices = [i for i, flag in enumerate(flags_sorted_full) if flag]
         
+        # Calculate how many normal points we can include
+        num_anomalies_to_include = len(anomaly_indices)
+        num_normal_to_sample = max_plot_points_overall - num_anomalies_to_include
+        
+        # Get normal indices
+        normal_indices = [i for i, flag in enumerate(flags_sorted_full) if not flag]
+        
+        # Sample evenly from normal points
+        if num_normal_to_sample > 0 and len(normal_indices) > num_normal_to_sample:
+            sampled_normal = np.linspace(0, len(normal_indices) - 1, num_normal_to_sample, dtype=int)
+            normal_indices_sampled = [normal_indices[i] for i in sampled_normal]
+        else:
+            normal_indices_sampled = normal_indices
+        
+        # Combine anomaly + sampled normal indices, then sort
+        # Sample evenly across entire dataset
+        # sample_indices_overall = np.linspace(0, len(timestamps_sorted_full) - 1, max_plot_points_overall, dtype=int)
+        sample_indices_overall = sorted(set(anomaly_indices + normal_indices_sampled))
         timestamps_sorted = [timestamps_sorted_full[i] for i in sample_indices_overall]
         errors_sorted = [errors_sorted_full[i] for i in sample_indices_overall]
         flags_sorted = [flags_sorted_full[i] for i in sample_indices_overall]
@@ -629,18 +664,32 @@ def train_autoencoder(X_train_scaled, X_val_scaled, device, save_dir, feature_na
         
         logger.info(f"   Using all {len(timestamps_sorted_full)} points for overall plot")
     anomaly_flags_full_for_ffn = list(flags_sorted_full)  # Full 17,265 flags for FFN!
+    # overall_rmse = float(np.sqrt(np.mean(np.array(reconstruction_errors_overall) ** 2)))
+    # overall_mae = float(np.mean(np.abs(reconstruction_errors_overall)))
+    # overall_std = float(np.std(reconstruction_errors_overall))
     overall_rmse = float(np.sqrt(np.mean(np.array(reconstruction_errors_overall) ** 2)))
     overall_mae = float(np.mean(np.abs(reconstruction_errors_overall)))
     overall_std = float(np.std(reconstruction_errors_overall))
 
+    # Convert to percentages (using mean reconstruction error as base)
+    mean_actual_overall = np.mean(np.abs(all_actual_overall))
+    overall_mae_pct = (overall_mae / mean_actual_overall) * 100 if mean_actual_overall != 0 else 0
+    overall_rmse_pct = (overall_rmse / mean_actual_overall) * 100 if mean_actual_overall != 0 else 0
+    overall_std_pct = (overall_std / mean_actual_overall) * 100 if mean_actual_overall != 0 else 0
+
     logger.info(f"   Overall RMSE: {overall_rmse:.4f}")
     logger.info(f"   Overall MAE: {overall_mae:.4f}")
     logger.info(f"   Overall Std: {overall_std:.4f}")
+#     overall_metrics_to_save = {
+#     "rmse": round(overall_rmse, 2),
+#     "mae": round(overall_mae, 2),
+#     "std": round(overall_std, 2)
+# }
     overall_metrics_to_save = {
-    "rmse": round(overall_rmse, 2),
-    "mae": round(overall_mae, 2),
-    "std": round(overall_std, 2)
-}
+        "rmse": round(overall_rmse_pct, 1),
+        "mae": round(overall_mae_pct, 1),
+        "std": round(overall_std_pct, 1)
+    }
 
     # Create overall anomaly detection data
     anomaly_detection_overall = {
@@ -650,11 +699,16 @@ def train_autoencoder(X_train_scaled, X_val_scaled, device, save_dir, feature_na
     "timestamps": [str(ts) for ts in timestamps_sorted],
     "anomaly_flags": list(flags_sorted),
     "anomaly_flags_full": anomaly_flags_full_for_ffn, 
+    # "metrics": {
+    #     "rmse": round(overall_rmse, 2),                                     # ← ROUND
+    #     "mae": round(overall_mae, 2),                                       # ← ROUND
+    #     "std": round(overall_std, 2)                                        # ← ROUND
+    # }
     "metrics": {
-        "rmse": round(overall_rmse, 2),                                     # ← ROUND
-        "mae": round(overall_mae, 2),                                       # ← ROUND
-        "std": round(overall_std, 2)                                        # ← ROUND
-    }
+    "rmse": round(overall_rmse_pct, 1),
+    "mae": round(overall_mae_pct, 1),
+    "std": round(overall_std_pct, 1)
+}
 }
 
     logger.info("✅ Overall anomaly data sorted chronologically")
@@ -705,6 +759,8 @@ def train_autoencoder(X_train_scaled, X_val_scaled, device, save_dir, feature_na
     scaler_path = os.path.join(autoencoder_dir, "ae_input_scaler.pkl")
     with open(scaler_path, 'wb') as f:
         pickle.dump(input_scaler, f)
+    logger.info(f"   DEBUG saving scaler mean: {input_scaler.mean_[:3]}")
+    logger.info(f"   DEBUG saving scaler scale: {input_scaler.scale_[:3]}")    
     logger.info(f"   ✅ Scaler saved to: {scaler_path}")
     # Save clean training data for SHAP background (when query has no normal data)
     logger.info("💾 Step 6.1: Saving clean training data for SHAP...")

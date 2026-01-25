@@ -331,18 +331,33 @@ def train_clean_data_ffn(all_actual_data, anomaly_flags, input_feature_names,
         actual = y_val[:, i]
         predicted = y_val_pred[:, i]
         
+        # rmse = np.sqrt(mean_squared_error(actual, predicted))
+        # mae = mean_absolute_error(actual, predicted)
+        # r2 = r2_score(actual, predicted)
         rmse = np.sqrt(mean_squared_error(actual, predicted))
         mae = mean_absolute_error(actual, predicted)
         r2 = r2_score(actual, predicted)
+
+        # Convert to percentages
+        mean_actual = np.mean(np.abs(actual))
+        mae_pct = (mae / mean_actual) * 100 if mean_actual != 0 else 0
+        rmse_pct = (rmse / mean_actual) * 100 if mean_actual != 0 else 0
+        r2_pct = r2 * 100
         
         logger.info(f"   {feature_name}:")
         logger.info(f"      RMSE: {rmse:.4f}, MAE: {mae:.4f}, R²: {r2:.4f}")
         
+        # results.append({
+        #     "feature_name": feature_name,
+        #     "rmse": float(rmse),
+        #     "mae": float(mae),
+        #     "r2": float(r2)
+        # })
         results.append({
             "feature_name": feature_name,
-            "rmse": float(rmse),
-            "mae": float(mae),
-            "r2": float(r2)
+            "rmse": round(rmse_pct, 1),
+            "mae": round(mae_pct, 1),
+            "r2": round(r2_pct, 1)
         })
         
         # Create plot_data entry (same structure as ts_response)
@@ -351,11 +366,16 @@ def train_clean_data_ffn(all_actual_data, anomaly_flags, input_feature_names,
             "actual": [round(float(x), 2) for x in actual],
             "predicted": [round(float(x), 2) for x in predicted],
             "timestamps": [str(ts) for ts in timestamps_val_ffn],  # Real timestamps
+            # "metrics": {
+            #     "rmse": round(float(rmse), 2),
+            #     "mae": round(float(mae), 2),
+            #     "r2": round(float(r2), 4)
+            # }
             "metrics": {
-                "rmse": round(float(rmse), 2),
-                "mae": round(float(mae), 2),
-                "r2": round(float(r2), 4)
-            }
+            "rmse": round(rmse_pct, 1),
+            "mae": round(mae_pct, 1),
+            "r2": round(r2_pct, 1)
+}
         })
     
     # Step 10: Save model

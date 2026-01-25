@@ -78,6 +78,8 @@ async def tag_correlation(input_json: InputModel):
     
     imo_number = input_json.metadata
     data_items = input_json.data
+    logger.info(f"📦 Raw request data: {input_json}")
+    logger.info(f"📦 Data items: {input_json.data}")
     logger.info(f"📊 Input received - IMO: {imo_number}, Number of items: {len(data_items)}")
 
     # Validate inputs
@@ -285,7 +287,9 @@ async def tag_correlation(input_json: InputModel):
                     skipped_columns.append(f"{col}: weak correlation")
                     continue
 
-                mi_score = round(float(mi_value), 4)
+                # mi_score = round(float(mi_value), 2)
+                mi_pct = (1 - np.exp(-mi_value)) * 100
+                mi_score = round(float(mi_pct), 1)
                             
                 mutual_info_results[col] = mi_score
                 
@@ -649,9 +653,18 @@ async def train_ml_model(request: dict):
             actual_flat = actuals_original[:, :, i].flatten()
             predicted_flat = predictions_original[:, :, i].flatten()
             
+            # rmse = np.sqrt(mean_squared_error(actual_flat, predicted_flat))
+            # mae = mean_absolute_error(actual_flat, predicted_flat)
+            # r2 = r2_score(actual_flat, predicted_flat)
             rmse = np.sqrt(mean_squared_error(actual_flat, predicted_flat))
             mae = mean_absolute_error(actual_flat, predicted_flat)
             r2 = r2_score(actual_flat, predicted_flat)
+
+            # Convert to percentages
+            mean_actual = np.mean(np.abs(actual_flat))
+            mae_pct = (mae / mean_actual) * 100 if mean_actual != 0 else 0
+            rmse_pct = (rmse / mean_actual) * 100 if mean_actual != 0 else 0
+            r2_pct = r2 * 100
             
             logger.info(f"📈 {feature_name}:")
             logger.info(f"   RMSE: {rmse:.4f}")
@@ -662,11 +675,16 @@ async def train_ml_model(request: dict):
                 "actual": actual_flat.tolist(),
                 "predicted": predicted_flat.tolist(),
                 "timestamps": [str(ts) for ts in timestamps_val],
+                # "metrics": {
+                #     "rmse": float(rmse),
+                #     "mae": float(mae),
+                #     "r2": float(r2)
+                # }
                 "metrics": {
-                    "rmse": float(rmse),
-                    "mae": float(mae),
-                    "r2": float(r2)
-                }
+                "rmse": round(rmse_pct, 1),
+                "mae": round(mae_pct, 1),
+                "r2": round(r2_pct, 1)
+               }
             })
 
         logger.info("✅ Predictions generated successfully!")

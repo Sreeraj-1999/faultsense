@@ -100,9 +100,12 @@ def explain_autoencoder_anomalies(start_date, end_date, vessel_imo, equipment, d
     logger.info("   ✅ Model loaded successfully")
     
     # Load input scaler
-    input_scaler_path = f"{model_dir}/input_scaler.pkl"
+    # input_scaler_path = f"{model_dir}/input_scaler.pkl"
+    input_scaler_path = f"{autoencoder_dir}/ae_input_scaler.pkl"
     with open(input_scaler_path, 'rb') as f:
         input_scaler = pickle.load(f)
+    logger.info(f"   DEBUG scaler mean: {input_scaler.mean_[:3]}")
+    logger.info(f"   DEBUG scaler scale: {input_scaler.scale_[:3]}")  
     
     logger.info("   ✅ Scaler loaded successfully")
 
@@ -126,6 +129,7 @@ def explain_autoencoder_anomalies(start_date, end_date, vessel_imo, equipment, d
     
     threshold_lower_from_training = saved_thresholds['overall_threshold_lower']
     threshold_upper_from_training = saved_thresholds['overall_threshold_upper']
+    logger.info(f"   DEBUG threshold_upper_from_training: {threshold_upper_from_training}")
     per_feature_thresholds_from_training = saved_thresholds['per_feature_thresholds']
     training_overall_metrics = saved_thresholds['overall_metrics']
     
@@ -141,6 +145,12 @@ def explain_autoencoder_anomalies(start_date, end_date, vessel_imo, equipment, d
     csv_path = config.CSV_PATH_COMBINED
     df = pd.read_csv(csv_path)
     df = df.sort_values(['vessel_id', 'Local_time']).reset_index(drop=True)
+    # Filter to current vessel only
+    # TODO: Map IMO to vessel_id properly in future
+    # imo_to_vessel = {'9665657': 2, '9665669': 1, '9665671': 0}
+    # vessel_id_filter = imo_to_vessel.get(vessel_imo, 2)
+    # df = df[df['vessel_id'] == vessel_id_filter].reset_index(drop=True)
+    # logger.info(f"   Filtered to vessel_id={vessel_id_filter} for IMO {vessel_imo}")
     df['Local_time'] = pd.to_datetime(df['Local_time'], format='mixed', dayfirst=True)
     
     # Filter by date range
@@ -160,9 +170,16 @@ def explain_autoencoder_anomalies(start_date, end_date, vessel_imo, equipment, d
     # logger.info(f"   ✅ Found {len(df_filtered)} rows in date range")
 
     df_filtered = df[(df['Local_time'] >= start_dt) & (df['Local_time'] <= end_dt)].copy()
+    logger.info(f"   DEBUG first 3 timestamps: {df_filtered['Local_time'].head(3).tolist()}")
+    logger.info(f"   DEBUG last 3 timestamps: {df_filtered['Local_time'].tail(3).tolist()}")
 
     logger.info(f"   Original data: {len(df)} rows")
     logger.info(f"   Filtered data: {len(df_filtered)} rows")
+    # Check if 21:30 exists
+    rows_2130 = df_filtered[df_filtered['Local_time'].astype(str).str.contains('21:30')]
+    logger.info(f"   DEBUG 21:30 rows count: {len(rows_2130)}")
+    if len(rows_2130) > 0:
+        logger.info(f"   DEBUG 21:30 vessel_ids: {rows_2130['vessel_id'].tolist()}")
 
     if len(df_filtered) < 1:
         logger.warning(f"⚠️  No data found in date range {start_date} to {end_date}")
@@ -263,6 +280,10 @@ def explain_autoencoder_anomalies(start_date, end_date, vessel_imo, equipment, d
 
     # Get feature data directly (no sequences!)
     X_rows = df_filtered[feature_names].values  # Shape: (num_rows, 17)
+    # Find the row with ME_Load=22.4 (vessel_id=1 anomaly)
+    for i, row in enumerate(X_rows):
+        if 20 < row[0] < 25:  # ME_Load@AVG around 22
+            logger.info(f"   DEBUG found ME_Load~22 at index {i}: {row[:5]}")
     timestamps_rows = df_filtered['Local_time'].tolist()
 
     num_rows = len(X_rows)
@@ -300,9 +321,25 @@ def explain_autoencoder_anomalies(start_date, end_date, vessel_imo, equipment, d
     # Inverse transform directly (no complex reshaping!)
     X_original = input_scaler.inverse_transform(X_scaled)          # (num_rows, 17)
     recon_original = input_scaler.inverse_transform(reconstructions)  # (num_rows, 17)
+    # Find index 86 (ME_Load=22.4197593 which is exactly the 21:30 row)
+    for i in range(len(X_original)):
+        if 22.41 < X_original[i, 0] < 22.42:
+            logger.info(f"   DEBUG exact 22.4197 row at index {i}")
+            logger.info(f"   DEBUG X_original full: {X_original[i]}")
+            logger.info(f"   DEBUG recon_original full: {recon_original[i]}")
+            error = np.sqrt(np.sum((X_original[i] - recon_original[i]) ** 2))
+            logger.info(f"   DEBUG error for this row: {error}")
 
     # Calculate reconstruction errors ON ORIGINAL SCALE (same as training!)
     reconstruction_errors = np.sqrt(np.sum((X_original - recon_original) ** 2, axis=1))
+    # Find max error index and check that row
+    max_idx = np.argmax(reconstruction_errors)
+    logger.info(f"   DEBUG max error at index {max_idx}")
+    logger.info(f"   DEBUG max error timestamp: {df_filtered.iloc[max_idx]['Local_time']}")
+    logger.info(f"   DEBUG X_original at max: {X_original[max_idx, :3]}")
+    logger.info(f"   DEBUG recon at max: {recon_original[max_idx, :3]}")
+    logger.info(f"   DEBUG X_original first row: {X_original[0, :3]}")
+    logger.info(f"   DEBUG recon_original first row: {recon_original[0, :3]}")
 
     logger.info("✅ Errors calculated on original scale")
     logger.info(f"   Errors shape: {reconstruction_errors.shape}")  # (num_rows,)
@@ -322,6 +359,9 @@ def explain_autoencoder_anomalies(start_date, end_date, vessel_imo, equipment, d
     anomaly_flags = (reconstruction_errors > threshold_upper)
 
     num_anomalies = np.sum(anomaly_flags)
+    logger.info(f"   DEBUG errors above threshold: {np.sum(reconstruction_errors > threshold_upper)}")
+    logger.info(f"   DEBUG errors min/max: {np.min(reconstruction_errors):.2f} / {np.max(reconstruction_errors):.2f}")
+    logger.info(f"   DEBUG num_anomalies: {num_anomalies}, max_error: {np.max(reconstruction_errors)}")
 
     logger.info(f"   Anomalies found: {num_anomalies}/{num_rows} ({num_anomalies/num_rows*100:.1f}%)")
     
