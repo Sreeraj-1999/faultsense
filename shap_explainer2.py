@@ -376,6 +376,7 @@ def explain_autoencoder_anomalies(start_date, end_date, vessel_imo, equipment, d
             {
                 "feature_name": name,
                 "shap_score": 0.0,
+                "contribution": 0,
                 "rank": i+1
             }
             for i, name in enumerate(feature_names)
@@ -488,20 +489,50 @@ def explain_autoencoder_anomalies(start_date, end_date, vessel_imo, equipment, d
         
         logger.info("   ✅ SHAP values calculated")
         
-        # Normalize to 0-1 range for display
+        # Normalize to 0-1 range for display               ###########  OLD SHAP 
+        # max_shap = np.max(feature_shap_scores)
+        # if max_shap > 0:
+        #     feature_shap_scores_normalized = feature_shap_scores / max_shap
+        # else:
+        #     feature_shap_scores_normalized = feature_shap_scores
+        
+        # # Create feature importance ranking
+        # feature_importance = []
+        # for i, (name, score) in enumerate(zip(feature_names, feature_shap_scores_normalized)):
+        #     # Convert to percentage (0-98 range, never 100)
+        #     if score >= 1.0:
+        #         contribution_pct = np.random.randint(94, 99)
+        #     else:
+        #         contribution_pct = int(score * 93)  # Max 93 for scores < 1
+        #     feature_importance.append({
+        #         "feature_name": name,
+        #         "shap_score": round(float(score), 4),
+        #         "contribution":contribution_pct,
+        #         "rank": i+1  # Will be re-ranked after sorting
+        #     }) # OLD SHAP
+
+        # Normalize so contributions sum to 100%
+        total_shap = np.sum(feature_shap_scores)
+        if total_shap > 0:
+            contribution_percentages = (feature_shap_scores / total_shap) * 100
+        else:
+            contribution_percentages = np.zeros_like(feature_shap_scores)
+
+        # Also keep max-normalized scores for display
         max_shap = np.max(feature_shap_scores)
         if max_shap > 0:
             feature_shap_scores_normalized = feature_shap_scores / max_shap
         else:
             feature_shap_scores_normalized = feature_shap_scores
-        
+
         # Create feature importance ranking
         feature_importance = []
-        for i, (name, score) in enumerate(zip(feature_names, feature_shap_scores_normalized)):
+        for i, (name, score, contribution) in enumerate(zip(feature_names, feature_shap_scores_normalized, contribution_percentages)):
             feature_importance.append({
                 "feature_name": name,
                 "shap_score": round(float(score), 4),
-                "rank": i+1  # Will be re-ranked after sorting
+                "contribution": int(round(contribution)),
+                "rank": i+1
             })
         
         # Sort by SHAP score (descending)
@@ -513,7 +544,8 @@ def explain_autoencoder_anomalies(start_date, end_date, vessel_imo, equipment, d
         
         logger.info("   📊 Top 5 contributing features:")
         for item in feature_importance[:5]:
-            logger.info(f"      {item['rank']}. {item['feature_name']}: {item['shap_score']:.4f}")   ###
+            # logger.info(f"      {item['rank']}. {item['feature_name']}: {item['shap_score']:.4f}")   ###
+            logger.info(f"      {item['rank']}. {item['feature_name']}: {item['shap_score']:.4f} → {item['contribution']}%")
     
     # ========================================================================
     # STEP 8: Prepare plot data for date range
@@ -564,6 +596,12 @@ def explain_autoencoder_anomalies(start_date, end_date, vessel_imo, equipment, d
         feature_metrics = feature_thresholds.get('metrics', {})
         if feature_metrics and feature_rank is not None:
             feature_metrics['rank'] = feature_rank
+            # Get contribution from feature_importance
+            feature_contribution = next(
+                (item['contribution'] for item in feature_importance if item['feature_name'] == feature_name),
+                0
+            )
+            feature_metrics['contribution'] = feature_contribution
         
         plot_data_features.append({
             "feature_name": feature_name,
